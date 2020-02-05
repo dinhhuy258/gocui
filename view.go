@@ -15,6 +15,7 @@ import (
 
 	"github.com/jesseduffield/termbox-go"
 	"github.com/mattn/go-runewidth"
+	"github.com/sirupsen/logrus"
 )
 
 // Constants for overlapping edges
@@ -105,6 +106,8 @@ type View struct {
 	ParentView *View
 
 	Context string // this is for assigning keybindings to a view only in certain contexts
+
+	log *logrus.Entry
 }
 
 type viewLine struct {
@@ -129,7 +132,7 @@ func (l lineType) String() string {
 }
 
 // newView returns a new View object.
-func newView(name string, x0, y0, x1, y1 int, mode OutputMode) *View {
+func newView(name string, x0, y0, x1, y1 int, mode OutputMode, log *logrus.Entry) *View {
 	v := &View{
 		name:    name,
 		x0:      x0,
@@ -140,6 +143,7 @@ func newView(name string, x0, y0, x1, y1 int, mode OutputMode) *View {
 		Editor:  DefaultEditor,
 		tainted: true,
 		ei:      newEscapeInterpreter(mode),
+		log:     log,
 	}
 	return v
 }
@@ -238,31 +242,96 @@ func (v *View) Write(p []byte) (n int, err error) {
 	v.writeMutex.Lock()
 	defer v.writeMutex.Unlock()
 
+	if len(v.lines) == 0 {
+		v.lines = make([][]cell, 1) // not sure why we're doing that
+	}
+
 	for _, ch := range bytes.Runes(p) {
 		switch ch {
 		case '\n':
-			v.lines = append(v.lines, nil)
+			if v.cy == len(v.lines)-1 {
+				v.lines = append(v.lines, nil)
+			}
+			v.cy += 1
+			v.cx = 0
 		case '\r':
 			if v.IgnoreCarriageReturns {
 				continue
 			}
-			nl := len(v.lines)
-			if nl > 0 {
-				v.lines[nl-1] = nil
-			} else {
-				v.lines = make([][]cell, 1)
-			}
+			v.cx = 0
 		default:
 			cells := v.parseInput(ch)
+			if v.ei.instruction.kind != NONE {
+				switch v.ei.instruction.kind {
+				case CURSOR_UP:
+					toMoveUp := v.ei.instruction.param1
+					// if we are already in the top line there's nothing we can do: so continue
+					if v.cy-toMoveUp <= 0 {
+						v.cy = 0
+					} else {
+						v.cy -= toMoveUp
+					}
+				case CURSOR_DOWN:
+					toMoveDown := v.ei.instruction.param1
+					for i := 0; i < toMoveDown; i++ {
+						if v.cy == len(v.lines)-1 {
+							v.lines = append(v.lines, nil)
+						}
+						v.cy++
+					}
+
+				case CURSOR_LEFT:
+					toMoveLeft := v.ei.instruction.param1
+					if v.cx-toMoveLeft <= 0 {
+						v.cx = 0
+					} else {
+						v.cx -= toMoveLeft
+					}
+				case CURSOR_RIGHT:
+					toMoveRight := v.ei.instruction.param1
+					for i := 0; i < toMoveRight; i++ {
+						if v.cx == len(v.lines[v.cy]) {
+							v.lines[v.cy] = append(v.lines[v.cy], cell{})
+						}
+						v.cx++
+					}
+				case ERASE_TO_END_OF_LINE:
+					v.lines[v.cy] = v.lines[v.cy][0:v.cx]
+				case CLEAR_SCREEN:
+					v.lines = make([][]cell, 1)
+					v.cx = 0
+					v.cy = 0
+				default:
+					panic("instruction not understood")
+				}
+				v.ei.instructionRead()
+			}
 			if cells == nil {
 				continue
 			}
 
-			nl := len(v.lines)
-			if nl > 0 {
-				v.lines[nl-1] = append(v.lines[nl-1], cells...)
-			} else {
-				v.lines = append(v.lines, cells)
+			if len(v.lines[v.cy]) == 0 {
+				v.lines[v.cy] = append(v.lines[v.cy], cell{})
+			}
+			if v.name == "main" {
+			}
+			for _, cell := range cells {
+				if cell.chr == 8 {
+					if v.cx > 0 {
+						v.cx--
+						v.lines[v.cy] = v.lines[v.cy][0 : len(v.lines[v.cy])-1]
+					}
+					continue
+				}
+				if v.cx == len(v.lines[v.cy])-1 {
+					v.lines[v.cy] = append(v.lines[v.cy], cell)
+				} else if v.cx < len(v.lines[v.cy])-1 {
+					v.lines[v.cy][v.cx] = cell
+				} else {
+					panic(v.name + ": above length for some reason")
+				}
+
+				v.cx++
 			}
 		}
 	}
@@ -278,6 +347,7 @@ func (v *View) parseInput(ch rune) []cell {
 
 	isEscape, err := v.ei.parseOne(ch)
 	if err != nil {
+		// there is an error parsing an escape sequence, ouput all the escape characters so far as a string
 		for _, r := range v.ei.runes() {
 			c := cell{
 				fgColor: v.FgColor,
@@ -392,7 +462,6 @@ func (v *View) draw() error {
 			if bgColor == ColorDefault {
 				bgColor = v.BgColor
 			}
-
 			if err := v.setRune(x, y, c.chr, fgColor, bgColor); err != nil {
 				return err
 			}
@@ -439,6 +508,8 @@ func (v *View) Clear() {
 	v.ei.reset()
 
 	v.lines = nil
+	v.cy = 0
+	v.cx = 0
 	v.viewLines = nil
 	v.readOffset = 0
 	v.clearRunes()

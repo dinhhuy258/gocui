@@ -13,6 +13,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/jesseduffield/termbox-go"
+	"github.com/sirupsen/logrus"
 )
 
 var (
@@ -94,10 +95,12 @@ type Gui struct {
 	// tickingMutex ensures we don't have two loops ticking. The point of 'ticking'
 	// is to refresh the gui rapidly so that loader characters can be animated.
 	tickingMutex sync.Mutex
+
+	log *logrus.Entry
 }
 
 // NewGui returns a new Gui object with a given output mode.
-func NewGui(mode OutputMode, supportOverlaps bool) (*Gui, error) {
+func NewGui(mode OutputMode, supportOverlaps bool, log *logrus.Entry) (*Gui, error) {
 	g := &Gui{}
 
 	var err error
@@ -123,6 +126,8 @@ func NewGui(mode OutputMode, supportOverlaps bool) (*Gui, error) {
 	// SupportOverlaps is true when we allow for view edges to overlap with other
 	// view edges
 	g.SupportOverlaps = supportOverlaps
+
+	g.log = log
 
 	return g, nil
 }
@@ -180,7 +185,7 @@ func (g *Gui) SetView(name string, x0, y0, x1, y1 int, overlaps byte) (*View, er
 		return v, nil
 	}
 
-	v := newView(name, x0, y0, x1, y1, g.outputMode)
+	v := newView(name, x0, y0, x1, y1, g.outputMode, g.log)
 	v.BgColor, v.FgColor = g.BgColor, g.FgColor
 	v.SelBgColor, v.SelFgColor = g.SelBgColor, g.SelFgColor
 	v.Overlaps = overlaps

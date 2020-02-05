@@ -18,6 +18,29 @@ type escapeInterpreter struct {
 	curFgColor, curBgColor Attribute
 	mode                   OutputMode
 	mutex                  sync.Mutex
+	instruction            instruction
+}
+
+/// new algorithm: if we hit an escape key start a sequence
+// if we then hit a terminator key, process the sequence
+
+const (
+	NONE = 1 << iota
+	CURSOR_UP
+	CURSOR_DOWN
+	CURSOR_LEFT
+	CURSOR_RIGHT
+	CURSOR_MOVE
+	CLEAR_SCREEN
+	ERASE_TO_END_OF_LINE
+	SAVE_CURSOR_POS
+	RESTORE_CURSOR_POS
+)
+
+type instruction struct {
+	kind   int
+	param1 int
+	param2 int
 }
 
 type escapeState int
@@ -28,6 +51,13 @@ const (
 	stateCSI
 	stateParams
 )
+
+var directionMap = map[rune]int{
+	'A': CURSOR_UP,
+	'B': CURSOR_DOWN,
+	'C': CURSOR_LEFT,
+	'D': CURSOR_RIGHT,
+}
 
 var (
 	errNotCSI        = errors.New("Not a CSI escape sequence")
@@ -51,7 +81,6 @@ func (ei *escapeInterpreter) runes() []rune {
 		ret := []rune{0x1b, '['}
 		for _, s := range ei.csiParam {
 			ret = append(ret, []rune(s)...)
-			ret = append(ret, ';')
 		}
 		return append(ret, ei.curch)
 	}
@@ -62,10 +91,11 @@ func (ei *escapeInterpreter) runes() []rune {
 // terminal escape sequences.
 func newEscapeInterpreter(mode OutputMode) *escapeInterpreter {
 	ei := &escapeInterpreter{
-		state:      stateNone,
-		curFgColor: ColorDefault,
-		curBgColor: ColorDefault,
-		mode:       mode,
+		state:       stateNone,
+		curFgColor:  ColorDefault,
+		curBgColor:  ColorDefault,
+		mode:        mode,
+		instruction: instruction{kind: NONE},
 	}
 	return ei
 }
@@ -79,6 +109,10 @@ func (ei *escapeInterpreter) reset() {
 	ei.curFgColor = ColorDefault
 	ei.curBgColor = ColorDefault
 	ei.csiParam = nil
+}
+
+func (ei *escapeInterpreter) instructionRead() {
+	ei.instruction.kind = NONE
 }
 
 // parseOne parses a rune. If isEscape is true, it means that the rune is part
@@ -117,6 +151,14 @@ func (ei *escapeInterpreter) parseOne(ch rune) (isEscape bool, err error) {
 			ei.csiParam = append(ei.csiParam, "")
 		case ch == 'm':
 			ei.csiParam = append(ei.csiParam, "0")
+		case ch == 'K':
+			ei.instruction.kind = ERASE_TO_END_OF_LINE
+
+			ei.state = stateNone
+			ei.csiParam = nil
+			return true, nil
+		case ch == '?':
+			ei.csiParam = append(ei.csiParam, "")
 		default:
 			return false, errCSIParseError
 		}
@@ -124,12 +166,14 @@ func (ei *escapeInterpreter) parseOne(ch rune) (isEscape bool, err error) {
 		fallthrough
 	case stateParams:
 		switch {
-		case ch >= '0' && ch <= '9':
+		case (ch >= '0' && ch <= '9') || ch == '?':
 			ei.csiParam[len(ei.csiParam)-1] += string(ch)
 			return true, nil
+
 		case ch == ';':
 			ei.csiParam = append(ei.csiParam, "")
 			return true, nil
+
 		case ch == 'm':
 			var err error
 			switch ei.mode {
@@ -145,6 +189,46 @@ func (ei *escapeInterpreter) parseOne(ch rune) (isEscape bool, err error) {
 			ei.state = stateNone
 			ei.csiParam = nil
 			return true, nil
+
+		case ch == 'A', ch == 'B', ch == 'C', ch == 'D':
+			p, err := strconv.Atoi(ei.csiParam[0])
+			if err != nil {
+				return false, errCSIParseError
+			}
+			ei.instruction.kind = directionMap[ch]
+			ei.instruction.param1 = p
+
+			ei.state = stateNone
+			ei.csiParam = nil
+			return true, nil
+
+		case ch == 'J':
+			ei.instruction.kind = CLEAR_SCREEN
+
+			ei.state = stateNone
+			ei.csiParam = nil
+			return true, nil
+
+		case ch == 'h':
+			if ei.csiParam[0] == "?25" {
+				// wants us to show the cursor but we never hide it in the first place
+			} else {
+				return false, errCSIParseError
+			}
+			ei.state = stateNone
+			ei.csiParam = nil
+			return true, nil
+
+		case ch == 'l':
+			if ei.csiParam[0] == "?25" {
+				// wants us to hide the cursor but we don't care
+			} else {
+				return false, errCSIParseError
+			}
+			ei.state = stateNone
+			ei.csiParam = nil
+			return true, nil
+
 		default:
 			return false, errCSIParseError
 		}
