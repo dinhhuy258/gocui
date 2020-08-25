@@ -13,7 +13,7 @@ import (
 
 	"github.com/go-errors/errors"
 
-	"github.com/jesseduffield/termbox-go"
+	"github.com/gdamore/tcell/termbox"
 )
 
 var (
