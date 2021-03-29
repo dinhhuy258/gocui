@@ -65,6 +65,10 @@ func simpleEditor(v *View, key Key, ch rune, mod Modifier) {
 // EditWrite writes a rune at the cursor position.
 func (v *View) EditWrite(ch rune) {
 	w := runewidth.RuneWidth(ch)
+	if w == 0 {
+		return
+	}
+
 	v.writeRune(v.cx, v.cy, ch)
 	v.moveCursor(w, 0, true)
 }
