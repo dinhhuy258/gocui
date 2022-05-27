@@ -146,6 +146,7 @@ type Gui struct {
 	currentView       *View
 	managers          []Manager
 	keybindings       []*keybinding
+	onKeyFunc         func(key Key, ch rune, mod Modifier) error
 	maxX, maxY        int
 	outputMode        OutputMode
 	stop              chan struct{}
@@ -501,6 +502,11 @@ func (g *Gui) DeleteKeybinding(viewname string, key interface{}, mod Modifier) e
 		}
 	}
 	return errors.New("keybinding not found")
+}
+
+// SetOnKeyFunc set keybindings callback function
+func (g *Gui) SetOnKeyFunc(handler func(key Key, ch rune, mod Modifier) error) {
+	g.onKeyFunc = handler
 }
 
 // DeleteKeybindings deletes all keybindings of view.
@@ -1143,9 +1149,19 @@ func (g *Gui) onKey(ev *GocuiEvent) error {
 	switch ev.Type {
 	case eventKey:
 
-		_, err := g.execKeybindings(g.currentView, ev)
+		matched, err := g.execKeybindings(g.currentView, ev)
 		if err != nil {
 			return err
+		}
+
+    if matched {
+      break
+    }
+
+		if g.onKeyFunc != nil {
+			if err := g.onKeyFunc(Key(ev.Key), ev.Ch, Modifier(ev.Mod)); err != nil {
+				return err
+			}
 		}
 
 	case eventMouse:
