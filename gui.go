@@ -1202,9 +1202,9 @@ func (g *Gui) onKey(ev *GocuiEvent) error {
 			return err
 		}
 
-    if matched {
-      break
-    }
+		if matched {
+			return nil
+		}
 
 		if g.onKeyFunc != nil {
 			if err := g.onKeyFunc(Key(ev.Key), ev.Ch, Modifier(ev.Mod)); err != nil {
